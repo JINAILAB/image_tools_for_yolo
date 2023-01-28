@@ -1,5 +1,17 @@
 import glob
 import cv2
+import argparse
+
+parser = argparse.ArgumentParser(description='bacteria_map')
+
+
+# 입력받을 인자값 설정 (default 값 설정가능)
+parser.add_argument('--epi_dir', type=str, default='./epidermidis_crop/*.png')
+parser.add_argument('--aur_dir', type=str, default='./aureus_crop/*.png')
+parser.add_argument('--cellcount', type=tuple, default=(10, 20), help='input 2 number (min ,  max) e.g. 8, 11')
+parser.add_argument('--map_count', type=int, default=300, help='how many maps you generate')
+# args 에 위의 내용 저장
+args = parser.parse_args()
 
 aur_dirs = glob.glob('./S. aureus_full/*.png')
 epi_dirs = glob.glob('./S. epidermidis_full/*.png')
