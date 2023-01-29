@@ -1,8 +1,8 @@
 import albumentations as A
 import cv2
-import glob
 import argparse
 import os
+import numpy as np
 
 parser = argparse.ArgumentParser(description='augmentation_for_yolo')
 
@@ -15,14 +15,9 @@ parser.add_argument('--crop_division_num', type=int, default=4, help='How many l
 # args 에 위의 내용 저장
 args = parser.parse_args()
 
-cwd = os.getcwd()
-
 
 class Transforms:
-    def __init__(self, folder_dir, preimg_resize, postimg_size, crop_division_num):
-        self.cwd = os.getcwd()
-        self.transforms_dict = {}
-        self.dir = folder_dir
+    def __init__(self, preimg_resize, postimg_size, crop_division_num):
         self.preimg_resize = preimg_resize
         self.postimg_size = postimg_size
         self.crop_division_num = crop_division_num
@@ -43,14 +38,14 @@ class Transforms:
                 classes.append(line.split(' ')[0])
         return bboxes, classes
 
-    def write_file(file_dir, img=None, boxes=None, classes=None):
-        img_write_dir = './images/' + file_dir + '.png'
-        txt_write_dir = './labels/' + file_dir + '.txt'
-        cv2.imwrite(img_write_dir, img)
-        with open(txt_write_dir, 'w') as f:
-            for i in range(len(boxes)):
-                strs = classes[i] + ' ' + ' '.join(str(s) for s in boxes[i]) + '\n'
-                f.write(strs)
+    # def write_file(file_dir, img=None, boxes=None, classes=None):
+    #     img_write_dir = './images/' + file_dir + '.png'
+    #     txt_write_dir = './labels/' + file_dir + '.txt'
+    #     cv2.imwrite(img_write_dir, img)
+    #     with open(txt_write_dir, 'w') as f:
+    #         for i in range(len(boxes)):
+    #             strs = classes[i] + ' ' + ' '.join(str(s) for s in boxes[i]) + '\n'
+    #             f.write(strs)
 
     def img_crop(self, img):
         images = []
@@ -87,11 +82,93 @@ class Transforms:
 
             label = []
             for j in zip(classes_tr, bboxes_tr):
-                print(type(j[0]))
                 ls = []
                 label.append([int(j[0]), *j[1]])
             labels.append(label)
         return images, labels
+
+    def visualize_bbox(self, img, bboxes, classes, thickness=2, write_text=False):
+        """Visualizes a bounding box on the image"""
+        assert img is not None, 'image is empty'
+        BOX_COLOR = {0: (255, 255, 000), 1: (102, 255, 153), 2: (10, 50, 100), 3: (255, 255, 255), 4: (255, 000, 255)}
+
+        img_size = img.shape[0]
+        for bbox, cls in zip(bboxes, classes):
+            x_center, y_center, x_w, y_h = bboxes
+            x_min, x_max, y_min, y_max = int((x_center-(1/2)*x_w) * img_size), int((x_center+(1/2)*x_w) * img_size), int((y_center-(1/2)*y_h) * img_size), int((y_center+(1/2)*y_h) * img_size)
+
+            cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color=BOX_COLOR[int(cls)%5], thickness=thickness)
+
+            if write_text:
+                cv2.putText(img, str(cls), (x_min, y_max), 1, color=BOX_COLOR[int(cls)%5], thickness=2)
+
+        return img
+
+
+
+
+
+
+
+class Cell_transform(Transforms):
+    def __init__(self, preimg_resize, postimg_size, crop_division_num):
+        super().__init__(preimg_resize, postimg_size, crop_division_num)
+        self.cwd = os.getcwd()
+        self.folder_dir = args.folder_dir
+        self.image_root_dir = os.path.join(self.cwd, self.folder_dir, 'images')
+        self.label_root_dir = os.path.join(self.cwd, self.folder_dir, 'labels')
+        self.image_listdir = os.listdir(self.image_root_dir)
+        self.label_listdir = os.listdir(self.label_root_dir)
+        self.image_dirs = sorted([os.path.join(self.image_root_dir, img_lst) for img_lst in self.image_listdir])
+        self.label_dirs = sorted([os.path.join(self.label_root_dir, img_lst) for img_lst in self.label_listdir])
+        self.image_extension = '.png'
+        self.label_extension = '.txt'
+
+    def find_mean_std(self, img_lsts):
+        meanRGB = [np.mean(x, axis=(0, 1)) for x in img_lsts]
+        stdRGB = [np.std(x, axis=(0, 1)) for x in img_lsts]
+
+        meanR = np.mean([m[0] for m in meanRGB])
+        meanG = np.mean([m[1] for m in meanRGB])
+        meanB = np.mean([m[2] for m in meanRGB])
+
+        stdR = np.mean([s[0] for s in stdRGB])
+        stdG = np.mean([s[1] for s in stdRGB])
+        stdB = np.mean([s[2] for s in stdRGB])
+
+        return (meanR, meanG, meanB), (stdR, stdG, stdB)
+
+    def find_label_quadrate(self, labels):
+        new_label = []
+        for label in labels:
+            if label[-1] / label[-2] > 0.85 and label[-1] / label[-2] < 1.20:
+                new_label.append(label)
+        return new_label
+
+
+    def write_crop_img_label(self):
+        cwd = os.getcwd()
+        if not os.path.exists(os.path.join(cwd, self.folder_dir, 'crop_images')):
+            os.mkdir(os.path.join(cwd, self.folder_dir, 'crop_images'))
+
+
+        if not os.path.exists(os.path.join(cwd, self.folder_dir, 'crop_labels')):
+            os.mkdir(os.path.join(cwd, self.folder_dir, 'crop_labels'))
+
+        for i, (image_dir, label_dir) in enumerate(zip(self.image_dirs, self.label_dirs)):
+            image = self.get_img(image_dir)
+            label = self.get_label(label_dir)
+            crop_images, crop_labels = self.img_label_crop(image, *label)
+            new_crop_labels = []
+            for k in crop_labels:
+                crop_label = self.find_label_quadrate(k)
+                new_crop_labels.append(crop_label)
+            for j, crop_image in enumerate(crop_images):
+                cv2.imwrite(os.path.join(os.path.join(cwd, self.folder_dir, 'crop_images'), os.path.basename(image_dir).split('.')[0]) +'_'+ str(j) + self.image_extension, crop_image)
+
+                with open(os.path.join(os.path.join(cwd, self.folder_dir, 'crop_labels'), os.path.basename(label_dir).split('.')[0]) +'_' + str(j) + self.label_extension, 'a') as f:
+                    for line in crop_labels:
+                        f.write(' '.join(str(s) for s in line)+'\n')
 
 
 
@@ -101,81 +178,6 @@ class Transforms:
 
 
 if __name__ == '__main__':
+    img_trans = Cell_transform(args.preimg_resize, args.postimg_resize, args.crop_division_num)
+    img_trans.write_crop_img_label()
 
-    a = Transforms(args.folder_dir, args.preimg_resize, args.postimg_resize, args.crop_division_num)
-    img = a.get_img('/Users/jinyong/Desktop/tools for detection/data/images/0818 s2.1.png')
-    labels = a.get_label('/Users/jinyong/Desktop/tools for detection/data/labels/aur_0_1.txt')
-    x, y = a.img_label_crop(img, *labels)
-    print(a.img_label_crop(img, *labels))
-    print(len(x), len(y))
-
-# transform1 = A.Compose([
-#     A.Crop(x_min=0, y_min=0, x_max=1024, y_max=1024)
-# ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-
-# transform2 = A.Compose([
-#     A.Crop(x_min=1024, y_min=0, x_max=2048, y_max=1024)
-# ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-
-# transform3 = A.Compose([
-#     A.Crop(x_min=0, y_min=1024, x_max=1024, y_max=2048)
-# ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-
-# transform4 = A.Compose([
-#     A.Crop(x_min=1024, y_min=1024, x_max=2048, y_max=2048)
-# ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-
-# bacteria = { '0' : 'aureus', '1' : 'epimidis'}
-# img_dirs = glob.glob('./2048_images/*.png')
-# img_dirs.sort()
-# txt_dirs = glob.glob('./2048_labels/*.txt')
-# txt_dirs.sort()
-
-
-# def getfile(img_file_dir, txt_file_dir):
-#     img = cv2.imread(img_file_dir, cv2.IMREAD_COLOR)
-#     #img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-#     bboxes = []
-#     classes = []
-#     with open(txt_file_dir, 'r') as file:
-#         lines = file.readlines()
-#         for line in lines:
-#             line = line.strip()
-#             bboxes.append(list(map(float, line.split(' ')))[1:])
-#             classes.append(line.split(' ')[0])
-#     print(img.shape)
-#     return img, bboxes, classes
-
-
-# for i in range(len(img_dirs)):
-#     img, bboxes, classes = getfile(img_dirs[i], txt_dirs[i])
-#     transformed1 = transform1(image=img, bboxes=bboxes, class_labels=classes)
-#     transformed2 = transform2(image=img, bboxes=bboxes, class_labels=classes)
-#     transformed3 = transform3(image=img, bboxes=bboxes, class_labels=classes)
-#     transformed4 = transform4(image=img, bboxes=bboxes, class_labels=classes)
-
-#     dir1 = img_dirs[i].split('.')[-2].split('/')[-1] +'_1'
-#     dir2 = img_dirs[i].split('.')[-2].split('/')[-1] +'_2'
-#     dir3 = img_dirs[i].split('.')[-2].split('/')[-1] +'_3'
-#     dir4 = img_dirs[i].split('.')[-2].split('/')[-1] +'_4'
-
-#     img_tr1 = transformed1['image']
-#     bboxes_tr1 = transformed1['bboxes']
-#     classes_tr1 = transformed1['class_labels']
-
-#     img_tr2 = transformed2['image']
-#     bboxes_tr2 = transformed2['bboxes']
-#     classes_tr2 = transformed2['class_labels']
-
-#     img_tr3 = transformed3['image']
-#     bboxes_tr3 = transformed3['bboxes']
-#     classes_tr3 = transformed3['class_labels']
-
-#     img_tr4 = transformed4['image']
-#     bboxes_tr4 = transformed4['bboxes']
-#     classes_tr4 = transformed4['class_labels']
-
-#     write_file(dir1, img_tr1, bboxes_tr1, classes_tr1)
-#     write_file(dir2, img_tr2, bboxes_tr2, classes_tr2)
-#     write_file(dir3, img_tr3, bboxes_tr3, classes_tr3)
-#     write_file(dir4, img_tr4, bboxes_tr4, classes_tr4)
